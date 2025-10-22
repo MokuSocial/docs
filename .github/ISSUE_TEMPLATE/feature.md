@@ -1,12 +1,32 @@
----
-name: Feature
-about: Aggiungere una feature trasversale
-title: ''
-labels: enhancement
+name: Vertical Feature
+description: Crea una nuova epic per una feature verticale con sub-issue collegate.
+title: "[V] "
+labels: ["vertical feature", "enhancement"]
 assignees: bugboy-20, jantizio, martinaammirabile
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Descrizione sintetica
+      placeholder: Breve riassunto della feature principale
 
----
+  - type: textarea
+    id: details
+    attributes:
+      label: Dettagli della feature
+      placeholder: Descrizione estesa o obiettivi principali
 
-- [ ] Design
-- [ ] Frontend
-- [ ] Backend
+  - type: textarea
+    id: subissues
+    attributes:
+      label: Sub-issue da creare
+      description: |
+        Scrivi una per riga, specificando il repository prima dei due punti.
+        Esempio:
+        - backend: Implementare UI di login
+        - frontend: Creare endpoint /login
+        - ui: Design pagina di login
+      placeholder: |
+        - moku: 
+        - moku-frontend: 
+        - docs:

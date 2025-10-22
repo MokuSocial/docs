@@ -1,0 +1,66 @@
+name: Crea sub-issue multi-repo da feature verticale
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  create-subissues:
+    if: contains(github.event.issue.labels.*.name, 'vertical feature')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Estrai sub-issue dal corpo della issue
+        id: extract
+        run: |
+          echo "${{ github.event.issue.body }}" | grep '^- ' > subissues.txt || true
+          echo "Sub-issue trovate:"
+          cat subissues.txt
+          sublist=$(tr '\n' '|' < subissues.txt)
+          echo "sublist=$sublist" >> $GITHUB_OUTPUT
+
+      - name: Crea le sub-issue nei rispettivi repo
+        env:
+          GH_TOKEN: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
+          MAIN_REPO: ${{ github.repository }}
+          EPIC_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          IFS='|' read -ra ISSUES <<< "${{ steps.extract.outputs.sublist }}"
+          echo "Creazione sub-issue per Issue #$EPIC_NUMBER..."
+
+          echo "### Sub-issue generate automaticamente" > checklist.txt
+          for i in "${ISSUES[@]}"; do
+            line=$(echo "$i" | sed 's/^- *//')
+            repo=$(echo "$line" | cut -d':' -f1 | xargs)
+            title=$(echo "$line" | cut -d':' -f2- | xargs)
+            
+            if [ -n "$repo" ] && [ -n "$title" ]; then
+              full_repo="YourOrg/$repo"
+              echo "→ Creando sub-issue in $full_repo: $title"
+              
+              url=$(gh issue create \
+                --repo "$full_repo" \
+                --title "$title" \
+                --body "Sub-issue di [${MAIN_REPO}#${EPIC_NUMBER}](https://github.com/${MAIN_REPO}/issues/${EPIC_NUMBER})" \
+                --label "sub-issue")
+              
+              echo "- [ ] $url ($repo)" >> checklist.txt
+            fi
+          done
+
+      - name: Aggiorna la Issue con i link alle sub-issue
+        env:
+          GH_TOKEN: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
+          MAIN_REPO: ${{ github.repository }}
+          EPIC_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          body=$(gh issue view "$EPIC_NUMBER" --repo "$MAIN_REPO" --json body -q .body)
+          echo "$body" > old_body.txt
+          echo -e "\n\n" >> old_body.txt
+          cat checklist.txt >> old_body.txt
+          gh issue edit "$EPIC_NUMBER" --repo "$MAIN_REPO" --body-file old_body.txt
+
