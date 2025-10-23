@@ -39,7 +39,7 @@ jobs:
             title=$(echo "$line" | cut -d':' -f2- | xargs)
             
             if [ -n "$repo" ] && [ -n "$title" ]; then
-              full_repo="YourOrg/$repo"
+              full_repo="MokuSocial/$repo"
               echo "→ Creando sub-issue in $full_repo: $title"
               
               url=$(gh issue create \
