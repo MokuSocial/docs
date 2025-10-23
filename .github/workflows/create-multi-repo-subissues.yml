@@ -37,6 +37,14 @@ jobs:
             line=$(echo "$i" | sed 's/^- *//')
             repo=$(echo "$line" | cut -d':' -f1 | xargs)
             title=$(echo "$line" | cut -d':' -f2- | xargs)
+
+            if [ "$repo" = "moku" ]; then
+              mantainer="bugboy-20"
+            elif [ "$repo" = "moku-frontend" ]; then
+              mantainer="jantizio"
+            else
+              mantainer="martinaammirabile"
+            fi
             
             if [ -n "$repo" ] && [ -n "$title" ]; then
               full_repo="MokuSocial/$repo"
@@ -46,7 +54,7 @@ jobs:
                 --repo "$full_repo" \
                 --title "$title" \
                 --body "Sub-issue di [${MAIN_REPO}#${EPIC_NUMBER}](https://github.com/${MAIN_REPO}/issues/${EPIC_NUMBER})" \
-                --label "sub-issue")
+                --assignee "$mantainer")
               
               echo "- [ ] $url ($repo)" >> checklist.txt
             fi
