@@ -23,46 +23,151 @@ jobs:
           sublist=$(tr '\n' '|' < subissues.txt)
           echo "sublist=$sublist" >> $GITHUB_OUTPUT
 
-      - name: Crea le sub-issue nei rispettivi repo
+      - name: Crea le sub-issue nei rispettivi repo e aggiungi a progetto
         env:
-          GH_TOKEN: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.ORG_GH_TOKEN }}
+          ORG: MokuSocial
+          PROJECT_NUMBER: 1
           MAIN_REPO: ${{ github.repository }}
           EPIC_NUMBER: ${{ github.event.issue.number }}
         run: |
+          sudo apt-get update && sudo apt-get install -y jq
+
+          # Recupera l'ID del progetto
+          PROJECT_ID=$(gh api graphql -f query='
+            query($org: String!, $number: Int!) {
+              organization(login: $org) {
+                projectV2(number: $number) {
+                  id
+                }
+              }
+            }' -f org=$ORG -F number=$PROJECT_NUMBER --jq '.data.organization.projectV2.id')
+          echo "Project ID: $PROJECT_ID"
+
+          # Recupera l'ID del campo Iteration
+          ITERATION_FIELD_ID=$(gh api graphql -f query='
+            query($org: String!, $number: Int!) {
+              organization(login: $org) {
+                projectV2(number: $number) {
+                  fields(first: 50) {
+                    nodes {
+                      ... on ProjectV2IterationField {
+                        id
+                        name
+                      }
+                    }
+                  }
+                }
+              }
+            }' -f org=$ORG -F number=$PROJECT_NUMBER --jq '.data.organization.projectV2.fields.nodes[] | select(.name=="Iteration") | .id')
+          echo "Iteration field ID: $ITERATION_FIELD_ID"
+
+          # Recupera l'ID della iterazione corrente
+          CURRENT_ITERATION_ID=$(gh api graphql -f query='
+            query($field:ID!) {
+              node(id: $field) {
+                ... on ProjectV2IterationField {
+                  configuration {
+                    iterations {
+                      id
+                      title
+                      startDate
+                    }
+                  }
+                }
+              }
+            }' -f field=$ITERATION_FIELD_ID --jq '.data.node.configuration.iterations[0].id')
+          echo "Current iteration ID: $CURRENT_ITERATION_ID"
+
           IFS='|' read -ra ISSUES <<< "${{ steps.extract.outputs.sublist }}"
           echo "Creazione sub-issue per Issue #$EPIC_NUMBER..."
-
           echo "### Sub-issue generate automaticamente" > checklist.txt
+
           for i in "${ISSUES[@]}"; do
             line=$(echo "$i" | sed 's/^- *//')
             repo=$(echo "$line" | cut -d':' -f1 | xargs)
             title=$(echo "$line" | cut -d':' -f2- | xargs)
 
+            # Assegna il maintainer in base al repo
             if [ "$repo" = "moku" ]; then
-              mantainer="bugboy-20"
+              maintainer="bugboy-20"
             elif [ "$repo" = "moku-frontend" ]; then
-              mantainer="jantizio"
+              maintainer="jantizio"
             else
-              mantainer="martinaammirabile"
+              maintainer="martinaammirabile"
             fi
-            
+
             if [ -n "$repo" ] && [ -n "$title" ]; then
-              full_repo="MokuSocial/$repo"
-              echo "→ Creando sub-issue in $full_repo: $title"
+              full_repo="${ORG}/${repo}"
+              echo "→ Creando sub-issue in $full_repo: $title (assegnata a @$maintainer)"
               
-              url=$(gh issue create \
-                --repo "$full_repo" \
-                --title "$title" \
-                --body "Sub-issue di [${MAIN_REPO}#${EPIC_NUMBER}](https://github.com/${MAIN_REPO}/issues/${EPIC_NUMBER})" \
-                --assignee "$mantainer")
-              
-              echo "- [ ] $url ($repo)" >> checklist.txt
+              # Crea la sub-issue
+              issue_json=$(gh api repos/$full_repo/issues \
+                -f title="$title" \
+                -f body="Sub-issue di [${MAIN_REPO}#${EPIC_NUMBER}](https://github.com/${MAIN_REPO}/issues/${EPIC_NUMBER})" \
+                -f assignees="$maintainer")
+
+              issue_url=$(echo "$issue_json" | jq -r '.html_url')
+              issue_id=$(echo "$issue_json" | jq -r '.node_id')
+
+              # Aggiunge la sub-issue al progetto
+              item_json=$(gh api graphql -f query='
+                mutation($project:ID!, $content:ID!) {
+                  addProjectV2ItemById(input:{projectId:$project, contentId:$content}) {
+                    item { id }
+                  }
+                }' -f project=$PROJECT_ID -f content=$issue_id)
+
+              item_id=$(echo "$item_json" | jq -r '.data.addProjectV2ItemById.item.id')
+
+              # Imposta la iterazione corrente
+              gh api graphql -f query='
+                mutation($project:ID!, $item:ID!, $field:ID!, $iteration:ID!) {
+                  updateProjectV2ItemFieldValue(input:{
+                    projectId:$project,
+                    itemId:$item,
+                    fieldId:$field,
+                    value:{iterationId:$iteration}
+                  }) { clientMutationId }
+                }' \
+                -f project=$PROJECT_ID \
+                -f item=$item_id \
+                -f field=$ITERATION_FIELD_ID \
+                -f iteration=$CURRENT_ITERATION_ID > /dev/null
+
+              echo "- [ ] $issue_url ($repo)" >> checklist.txt
             fi
           done
 
+          # Aggiunge anche la issue principale al progetto
+          EPIC_ID=$(gh issue view "$EPIC_NUMBER" --repo "$MAIN_REPO" --json node_id -q .node_id)
+          EPIC_ITEM_JSON=$(gh api graphql -f query='
+            mutation($project:ID!, $content:ID!) {
+              addProjectV2ItemById(input:{projectId:$project, contentId:$content}) {
+                item { id }
+              }
+            }' -f project=$PROJECT_ID -f content=$EPIC_ID)
+
+          EPIC_ITEM_ID=$(echo "$EPIC_ITEM_JSON" | jq -r '.data.addProjectV2ItemById.item.id')
+
+          # Imposta anche l'epic nella iterazione corrente
+          gh api graphql -f query='
+            mutation($project:ID!, $item:ID!, $field:ID!, $iteration:ID!) {
+              updateProjectV2ItemFieldValue(input:{
+                projectId:$project,
+                itemId:$item,
+                fieldId:$field,
+                value:{iterationId:$iteration}
+              }) { clientMutationId }
+            }' \
+            -f project=$PROJECT_ID \
+            -f item=$EPIC_ITEM_ID \
+            -f field=$ITERATION_FIELD_ID \
+            -f iteration=$CURRENT_ITERATION_ID > /dev/null
+
       - name: Aggiorna la Issue con i link alle sub-issue
         env:
-          GH_TOKEN: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.ORG_GH_TOKEN }}
           MAIN_REPO: ${{ github.repository }}
           EPIC_NUMBER: ${{ github.event.issue.number }}
         run: |
@@ -71,5 +176,4 @@ jobs:
           echo -e "\n\n" >> old_body.txt
           cat checklist.txt >> old_body.txt
           gh issue edit "$EPIC_NUMBER" --repo "$MAIN_REPO" --body-file old_body.txt
-
 
